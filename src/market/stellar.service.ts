@@ -11,6 +11,9 @@ import type { OnChainPerpetual } from './perpetual.types';
 
 const execFileAsync = promisify(execFile);
 
+/** Hard cap on a single `stellar` CLI process; a hung network read is killed instead of blocking forever. */
+const CLI_TIMEOUT_MS = Number(process.env.STELLAR_CLI_TIMEOUT_MS) || 120_000;
+
 const CLI_RETRY_ATTEMPTS = 3;
 const CLI_RETRY_DELAY_MS = 2000;
 const RPC_RETRY_ATTEMPTS = 3;
@@ -899,11 +902,15 @@ export class StellarService {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
-        return await execFileAsync('stellar', args);
+        return await execFileAsync('stellar', args, { timeout: CLI_TIMEOUT_MS, killSignal: 'SIGKILL' });
       } catch (err) {
         lastErr = err;
-        const message = (err as { stderr?: string; message: string }).stderr ?? (err as Error).message;
-        if (attempt === attempts || !isTransientStellarCliError(message)) throw err;
+        const timedOut = (err as { killed?: boolean }).killed === true;
+        const message = timedOut
+          ? `stellar CLI timed out after ${CLI_TIMEOUT_MS}ms`
+          : ((err as { stderr?: string; message: string }).stderr ?? (err as Error).message);
+        if (timedOut && attempt === attempts) throw new Error(message);
+        if (attempt === attempts || (!timedOut && !isTransientStellarCliError(message))) throw err;
         this.logger.warn(
           `stellar CLI call failed transiently (attempt ${attempt}/${attempts}), retrying: ${summaryLine(message)}`,
         );
