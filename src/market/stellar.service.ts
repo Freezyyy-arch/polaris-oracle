@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Keypair, rpc } from '@stellar/stellar-sdk';
 import { contract as StellarContract } from '@stellar/stellar-sdk';
+import { xdr } from '@stellar/stellar-sdk';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { marketSpec, perpetualSpec, factorySpec, vaultSpec, mockRedstoneSpec } from './contracts';
@@ -12,14 +13,16 @@ import type { OnChainPerpetual } from './perpetual.types';
 const execFileAsync = promisify(execFile);
 
 /** Hard cap on a single `stellar` CLI process; a hung network read is killed instead of blocking forever. */
+/** Bounded poll for a freshly deployed contract to become visible before `initialize`. */
+const CONTRACT_VISIBLE_TIMEOUT_MS = 30_000;
+const CONTRACT_VISIBLE_POLL_MS = 1000;
+
 const CLI_TIMEOUT_MS = Number(process.env.STELLAR_CLI_TIMEOUT_MS) || 120_000;
 
 const CLI_RETRY_ATTEMPTS = 3;
 const CLI_RETRY_DELAY_MS = 2000;
 const RPC_RETRY_ATTEMPTS = 3;
 const RPC_RETRY_DELAY_MS = 1000;
-/** Gives the deployed contract a moment to propagate before `initialize` looks for it — see `deployMarket`. */
-const DEPLOY_TO_INIT_DELAY_MS = 1500;
 
 /**
  * `stellar` CLI failures seen live on testnet, from back-to-back calls
@@ -687,7 +690,7 @@ export class StellarService {
     // `initialize` immediately queries next — a bare wait here cuts down how
     // often the retry below is actually needed, rather than relying on it
     // to paper over an avoidable race every time.
-    await sleep(DEPLOY_TO_INIT_DELAY_MS);
+    await this.waitForContractVisible(contractId);
 
     const initArgs = [
       'contract',
@@ -843,7 +846,7 @@ export class StellarService {
     const contractId = deploy.stdout.trim().split('\n').pop()!.trim();
     this.logger.log(`deployed perpetual contract ${contractId}`);
 
-    await sleep(DEPLOY_TO_INIT_DELAY_MS);
+    await this.waitForContractVisible(contractId);
 
     const initArgs = [
       'contract',
@@ -918,6 +921,25 @@ export class StellarService {
       }
     }
     throw lastErr;
+  }
+
+  /** Polls the RPC for the contract instance entry until visible (up to 30s), so `initialize` doesn't race deploy propagation. */
+  private async waitForContractVisible(contractId: string): Promise<void> {
+    const deadline = Date.now() + CONTRACT_VISIBLE_TIMEOUT_MS;
+    for (;;) {
+      try {
+        await this.server.getContractData(contractId, xdr.ScVal.scvLedgerKeyContractInstance());
+        return;
+      } catch {
+        // not found yet (or transient RPC error): keep polling until the deadline
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `deployed contract ${contractId} not visible on the RPC after ${CONTRACT_VISIBLE_TIMEOUT_MS}ms; it is deployed but uninitialized and must be recovered manually`,
+        );
+      }
+      await sleep(CONTRACT_VISIBLE_POLL_MS);
+    }
   }
 }
 
