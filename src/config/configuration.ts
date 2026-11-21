@@ -115,6 +115,8 @@ export interface AppConfig {
   mockRedstoneContract: string | undefined;
   redstoneMaxStalenessSecs: string;
   redstoneToleranceBps: number;
+  /** Warn when the oracle or deployer hot-wallet XLM balance falls below this — in stroops. Requires `NATIVE_XLM_SAC` to be set; silently skipped otherwise. */
+  oracleMinBalanceStroops: string;
 }
 
 import { randomBytes } from 'node:crypto';
@@ -244,4 +246,5 @@ export default (): AppConfig => ({
   mockRedstoneContract: process.env.MOCK_REDSTONE_CONTRACT,
   redstoneMaxStalenessSecs: process.env.REDSTONE_MAX_STALENESS_SECS ?? '600',
   redstoneToleranceBps: Number(process.env.REDSTONE_TOLERANCE_BPS ?? 150),
+  oracleMinBalanceStroops: process.env.ORACLE_MIN_BALANCE_STROOPS ?? '50000000', // 5 XLM
 });

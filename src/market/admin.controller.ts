@@ -97,6 +97,11 @@ export class AdminController {
         contractId,
         stroops: stroops.toString(),
       })),
+      // sampleSize counts ALL buy/sell rows, including those whose fee data
+      // was null and therefore skipped from the totals above.  This is
+      // intentional: the number tells the dashboard "this is how many trades
+      // the estimate is drawn from," and knowing a row existed but lacked fee
+      // data is itself useful signal (it shows the estimate may be low).
       sampleSize: rows.length,
     };
   }
@@ -145,10 +150,21 @@ export class AdminController {
   @Get('network')
   async network() {
     const health = await this.stellar.getNetworkHealth();
+    const nativeXlmSac = this.config.get<string>('nativeXlmSac');
+    let oracleXlmBalanceStroops: string | null = null;
+    let deployerXlmBalanceStroops: string | null = null;
+    if (nativeXlmSac) {
+      [oracleXlmBalanceStroops, deployerXlmBalanceStroops] = await Promise.all([
+        this.stellar.tokenBalance(nativeXlmSac, this.stellar.oraclePublicKey).then((b) => b.toString()).catch(() => null),
+        this.stellar.tokenBalance(nativeXlmSac, this.stellar.deployerPublicKey).then((b) => b.toString()).catch(() => null),
+      ]);
+    }
     return {
       ...health,
       oraclePublicKey: this.stellar.oraclePublicKey,
       deployerPublicKey: this.stellar.deployerPublicKey,
+      oracleXlmBalanceStroops,
+      deployerXlmBalanceStroops,
       contracts: {
         vaultContract: this.config.get<string>('vaultContract'),
         lazerContract: this.config.get<string>('lazerContract'),

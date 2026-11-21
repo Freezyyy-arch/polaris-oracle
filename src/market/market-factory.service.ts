@@ -96,6 +96,7 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
    * timers.
    */
   async run(): Promise<MarketFactoryRunResult> {
+    await this.checkHotWalletBalances();
     const catalog = this.config.get<FeedCatalogEntry[]>('feedCatalog') ?? [];
     const result: MarketFactoryRunResult = { created: [], skipped: [], failed: [] };
 
@@ -234,6 +235,31 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
    * (timeout, malformed response, missing catalog entry) still falls
    * through to this same path unchanged.
    */
+  /** Logs a warning when the oracle or deployer hot-wallet XLM balance is below the configured threshold. Called once per factory interval. Requires `nativeXlmSac` to be configured; silently skips otherwise. */
+  private async checkHotWalletBalances(): Promise<void> {
+    const nativeXlmSac = this.config.get<string>('nativeXlmSac');
+    if (!nativeXlmSac) return;
+    const minStroops = BigInt(this.config.get<string>('oracleMinBalanceStroops') ?? '50000000');
+    const wallets: { label: string; address: string }[] = [
+      { label: 'oracle', address: this.stellar.oraclePublicKey },
+      { label: 'deployer', address: this.stellar.deployerPublicKey },
+    ];
+    await Promise.allSettled(
+      wallets.map(async ({ label, address }) => {
+        try {
+          const balance = await this.stellar.tokenBalance(nativeXlmSac, address);
+          if (balance < minStroops) {
+            this.logger.warn(
+              `${label} hot-wallet XLM balance low: ${balance} stroops (threshold: ${minStroops}) — trades, settlement, and wallet deploys may fail`,
+            );
+          }
+        } catch (err) {
+          this.logger.warn(`failed to read ${label} hot-wallet XLM balance: ${(err as Error).message}`);
+        }
+      }),
+    );
+  }
+
   private async fetchStrikePriceCents(entry: FeedCatalogEntry, reflectorContract: string): Promise<bigint> {
     const hermesUrl = this.config.get<string>('pythHermesUrl')!;
     try {
