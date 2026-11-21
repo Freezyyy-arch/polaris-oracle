@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import Database from 'better-sqlite3';
 import { DATABASE } from './database.provider';
+import type { PerpetualRow } from './market-row.types';
 import type { WatchedPerpetual } from './perpetual.types';
 
 @Injectable()
@@ -37,17 +38,17 @@ export class PerpetualRepository {
   }
 
   getAll(): WatchedPerpetual[] {
-    const rows = this.db.prepare(`SELECT * FROM perpetuals ORDER BY created_at DESC`).all() as any[];
+    const rows = this.db.prepare(`SELECT * FROM perpetuals ORDER BY created_at DESC`).all() as PerpetualRow[];
     return rows.map(rowToPerpetual);
   }
 
   getById(contractId: string): WatchedPerpetual | undefined {
-    const row = this.db.prepare(`SELECT * FROM perpetuals WHERE contract_id = ?`).get(contractId) as any;
+    const row = this.db.prepare(`SELECT * FROM perpetuals WHERE contract_id = ?`).get(contractId) as PerpetualRow | undefined;
     return row ? rowToPerpetual(row) : undefined;
   }
 }
 
-function rowToPerpetual(row: any): WatchedPerpetual {
+function rowToPerpetual(row: PerpetualRow): WatchedPerpetual {
   return {
     contractId: row.contract_id,
     status: row.status,

@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import Database from 'better-sqlite3';
 import { DATABASE } from './database.provider';
+import type { MarketRow } from './market-row.types';
 import type { WatchedMarket } from './market.types';
 
 export { MARKETS_DB_PATH } from './database.provider';
@@ -43,26 +44,26 @@ export class MarketRepository {
   }
 
   getAll(): WatchedMarket[] {
-    const rows = this.db.prepare(`SELECT * FROM markets ORDER BY created_at DESC`).all() as any[];
+    const rows = this.db.prepare(`SELECT * FROM markets ORDER BY created_at DESC`).all() as MarketRow[];
     return rows.map(rowToMarket);
   }
 
   getById(contractId: string): WatchedMarket | undefined {
     const row = this.db
       .prepare(`SELECT * FROM markets WHERE contract_id = ?`)
-      .get(contractId) as any;
+      .get(contractId) as MarketRow | undefined;
     return row ? rowToMarket(row) : undefined;
   }
 
   getByFeedId(feedId: number): WatchedMarket[] {
     const rows = this.db
       .prepare(`SELECT * FROM markets WHERE feed_id = ? ORDER BY created_at DESC`)
-      .all(feedId) as any[];
+      .all(feedId) as MarketRow[];
     return rows.map(rowToMarket);
   }
 }
 
-function rowToMarket(row: any): WatchedMarket {
+function rowToMarket(row: MarketRow): WatchedMarket {
   return {
     contractId: row.contract_id,
     strikePriceCents: row.strike_price_cents,
