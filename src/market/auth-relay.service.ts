@@ -1,10 +1,8 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { StellarService } from './stellar.service';
 import {
   BASE_FEE,
   Contract,
-  Keypair,
-  Networks,
   TransactionBuilder,
   authorizeEntry,
   buildAuthorizationEntryPreimage,
@@ -71,18 +69,11 @@ export interface WebAuthnAssertion {
 export class AuthRelayService {
   private readonly logger = new Logger(AuthRelayService.name);
   private readonly server: rpc.Server;
-  private readonly keypair: Keypair;
   private readonly networkPassphrase: string;
 
-  constructor(private readonly config: ConfigService) {
-    const secret = this.config.get<string>('oracleSecretKey');
-    if (!secret) {
-      throw new Error('ORACLE_SECRET_KEY is required to start polaris-oracle');
-    }
-    this.keypair = Keypair.fromSecret(secret);
-    this.networkPassphrase = this.config.get<string>('stellarNetworkPassphrase') ?? Networks.TESTNET;
-    const rpcUrl = this.config.get<string>('stellarRpcUrl')!;
-    this.server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+  constructor(private readonly stellar: StellarService) {
+    this.server = stellar.server;
+    this.networkPassphrase = stellar.networkPassphrase;
   }
 
   async prepare(
@@ -95,7 +86,7 @@ export class AuthRelayService {
     const scArgs = buildSponsoredCallArgs(specFor(contractKind), functionName, walletAddress, wireArgs);
     const op = new Contract(contractId).call(functionName, ...scArgs);
 
-    const sourceAccount = await this.server.getAccount(this.keypair.publicKey());
+    const sourceAccount = await this.server.getAccount(this.stellar.oraclePublicKey);
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,
@@ -168,7 +159,7 @@ export class AuthRelayService {
     const op = new Contract(contractId).call(functionName, ...scArgs);
     op.body().invokeHostFunctionOp().auth([signedEntry]);
 
-    const sourceAccount = await this.server.getAccount(this.keypair.publicKey());
+    const sourceAccount = await this.server.getAccount(this.stellar.oraclePublicKey);
     let tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,
@@ -182,7 +173,7 @@ export class AuthRelayService {
       throw new BadRequestException(`simulation failed: ${sim.error}`);
     }
     tx = rpc.assembleTransaction(tx, sim).build();
-    tx.sign(this.keypair);
+    this.stellar.signAsSponsor(tx);
 
     const sendRes = await this.server.sendTransaction(tx);
     if (sendRes.status === 'ERROR') {

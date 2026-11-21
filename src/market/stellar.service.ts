@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Keypair, rpc } from '@stellar/stellar-sdk';
+import { Keypair, rpc, type Transaction } from '@stellar/stellar-sdk';
 import { contract as StellarContract } from '@stellar/stellar-sdk';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -273,6 +273,11 @@ export class StellarService {
 
   get oraclePublicKey(): string {
     return this.keypair.publicKey();
+  }
+
+  /** Signs `tx` in place as the sponsor/fee-payer (the oracle keypair) — used by `AuthRelayService`. */
+  signAsSponsor(tx: Transaction): void {
+    tx.sign(this.keypair);
   }
 
   get deployerPublicKey(): string {
