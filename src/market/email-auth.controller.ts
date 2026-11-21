@@ -4,7 +4,6 @@ import {
   Controller,
   Get,
   HttpCode,
-  Logger,
   Post,
   Req,
   Res,
@@ -13,9 +12,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { Request, Response } from 'express';
 import { EmailAuthService } from './email-auth.service';
-import { StellarService } from './stellar.service';
-import { AdminActivityRepository, type WalletActionFunction } from './admin-activity.repository';
-import { feeBearingAmount } from './wire-args';
+import { TradeActivityRecorder } from './trade-activity-recorder.service';
 import { RequestEmailCodeDto } from './dto/request-email-code.dto';
 import { VerifyEmailCodeDto } from './dto/verify-email-code.dto';
 import { EmailTradeDto } from './dto/email-trade.dto';
@@ -34,13 +31,10 @@ const SESSION_COOKIE = 'polaris_session';
  */
 @Controller('auth/email')
 export class EmailAuthController {
-  private readonly logger = new Logger(EmailAuthController.name);
-
   constructor(
     private readonly emailAuth: EmailAuthService,
     private readonly config: ConfigService,
-    private readonly stellar: StellarService,
-    private readonly activity: AdminActivityRepository,
+    private readonly tradeRecorder: TradeActivityRecorder,
   ) {}
 
   @Post('request')
@@ -95,27 +89,16 @@ export class EmailAuthController {
     } catch (err) {
       throw new BadRequestException(messageOf(err));
     }
-    // Best-effort admin-dashboard logging — see wallet.controller.ts's
-    // `submit` handler for the identical pattern and why a failure here
-    // must never affect the real response.
-    try {
-      const feeBps = ['buy', 'sell'].includes(dto.function)
-        ? await (dto.contractKind === 'perpetual'
-            ? this.stellar.getPerpetualFee(dto.contractId)
-            : this.stellar.getFee(dto.contractId))
-        : undefined;
-      this.activity.recordWalletAction({
-        contractId: dto.contractId,
-        walletAddress: result.walletAddress,
-        functionName: dto.function as WalletActionFunction,
-        collateralAmount: feeBearingAmount(dto.function, dto.args),
-        feeBps,
-        txHash: result.txHash,
-        source: 'email',
-      });
-    } catch (err) {
-      this.logger.warn(`failed to record admin-activity row for tx ${result.txHash}: ${(err as Error).message}`);
-    }
+    // Best-effort admin-dashboard logging, fire-and-forget (see TradeActivityRecorder).
+    this.tradeRecorder.recordTrade({
+      contractId: dto.contractId,
+      function: dto.function,
+      args: dto.args,
+      contractKind: dto.contractKind,
+      walletAddress: result.walletAddress,
+      txHash: result.txHash,
+      source: 'email',
+    });
     return { txHash: result.txHash };
   }
 
