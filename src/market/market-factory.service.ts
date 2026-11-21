@@ -168,9 +168,6 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    const strikePriceCents = await this.fetchStrikePriceCents(entry, reflectorContract);
-    const now = Math.floor(Date.now() / 1000);
-    const expiry = now + this.config.get<number>('marketFactoryExpirySecs')!;
     const gracePeriodSecs = this.config.get<number>('marketFactoryGracePeriodSecs')!;
     const initialLiquidityStroops = BigInt(this.config.get<string>('marketFactoryInitialLiquidityStroops')!);
 
@@ -179,6 +176,11 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
     // deployMarket never runs, so there's no partially-funded market left
     // behind. See the module doc: every entry fails independently.
     const withdrawTxHash = await this.stellar.vaultWithdraw(vaultContract, initialLiquidityStroops);
+
+    // Strike and expiry are taken right before deploy, after the withdraw
+    // round trip, so neither is stale by the time the market opens.
+    const strikePriceCents = await this.fetchStrikePriceCents(entry, reflectorContract);
+    const expiry = Math.floor(Date.now() / 1000) + this.config.get<number>('marketFactoryExpirySecs')!;
 
     const { contractId } = await this.stellar.deployMarket({
       strikePriceCents,
