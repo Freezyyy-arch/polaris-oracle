@@ -45,7 +45,7 @@ export class AdminController {
     // Kept separate from `marketsByStatus` rather than merged into one
     // grouping — a perpetual's `WatchedPerpetualStatus` ('watching' |
     // 'terminated') isn't the same status space as a classic market's
-    // ('watching' | 'settling' | 'settled' | 'cancelling' | 'cancelled' |
+    // ('watching' | 'settled' | 'cancelled' |
     // 'pending'), so combining them would either collide 'watching'
     // across two different meanings or need namespacing either way — a
     // separate top-level field is the honest shape, matching this round's
