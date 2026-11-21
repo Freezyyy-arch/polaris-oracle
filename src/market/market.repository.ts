@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WatchedMarket } from './market.types';
+import { runMigrations } from './schema-migrations';
 
 /**
  * Nest can't inject a bare `string` (or number/boolean) as a provider token
@@ -41,6 +42,7 @@ export class MarketRepository implements OnModuleDestroy {
         updated_at INTEGER NOT NULL
       );
     `);
+    runMigrations(this.db);
   }
 
   upsert(m: WatchedMarket): void {
