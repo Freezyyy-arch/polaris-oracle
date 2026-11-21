@@ -8,6 +8,7 @@ import { marketSpec, perpetualSpec, factorySpec, vaultSpec, mockRedstoneSpec } f
 import { hermesPriceToCents } from './pyth-price';
 import type { OnChainMarket } from './market.types';
 import type { OnChainPerpetual } from './perpetual.types';
+import { redactSecrets, sanitizeCliError, extractContractId } from './stellar-cli-utils';
 
 const execFileAsync = promisify(execFile);
 
@@ -902,8 +903,8 @@ export class StellarService {
         return await execFileAsync('stellar', args);
       } catch (err) {
         lastErr = err;
-        const message = (err as { stderr?: string; message: string }).stderr ?? (err as Error).message;
-        if (attempt === attempts || !isTransientStellarCliError(message)) throw err;
+        const message = redactSecrets((err as { stderr?: string; message: string }).stderr ?? (err as Error).message);
+        if (attempt === attempts || !isTransientStellarCliError(message)) throw sanitizeCliError(err);
         this.logger.warn(
           `stellar CLI call failed transiently (attempt ${attempt}/${attempts}), retrying: ${summaryLine(message)}`,
         );
