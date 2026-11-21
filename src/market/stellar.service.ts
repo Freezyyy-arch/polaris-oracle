@@ -784,32 +784,28 @@ export class StellarService {
    * this exact contract elsewhere in this codebase).
    */
   async getReflectorPriceCents(reflectorContract: string, asset: string): Promise<bigint> {
-    const network = this.config.get<string>('stellarNetwork')!;
-    const baseArgs = [
-      'contract',
-      'invoke',
-      '--id',
-      reflectorContract,
-      '--source',
-      this.deployerSecretKey,
-      '--network',
-      network,
-      '--rpc-url',
-      this.rpcUrl,
-      '--network-passphrase',
-      this.networkPassphrase,
-      '--',
-    ];
-    const [priceRes, decimalsRes] = await Promise.all([
-      this.execStellarCli([...baseArgs, 'lastprice', '--asset', JSON.stringify({ Other: asset })]),
-      this.execStellarCli([...baseArgs, 'decimals']),
+    // Read-only simulation via contract.Client (like tokenBalance): no CLI
+    // process and no secret — oraclePublicKey is only the simulation source.
+    const client = (await StellarContract.Client.from({
+      contractId: reflectorContract,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
+      allowHttp: this.rpcUrl.startsWith('http://'),
+      publicKey: this.oraclePublicKey,
+    })) as unknown as {
+      lastprice(args: { asset: { tag: 'Other'; values: [string] } }): Promise<StellarContract.AssembledTransaction<{ price: bigint; timestamp: bigint } | undefined | null>>;
+      decimals(): Promise<StellarContract.AssembledTransaction<number>>;
+    };
+    const [priceTx, decimalsTx] = await Promise.all([
+      this.withRpcRetry(() => client.lastprice({ asset: { tag: 'Other', values: [asset] } })),
+      this.withRpcRetry(() => client.decimals()),
     ]);
-    const priceData = JSON.parse(priceRes.stdout.trim()) as { price: string; timestamp: number } | null;
+    const priceData = priceTx.result;
     if (!priceData) throw new Error(`Reflector returned no price for asset ${asset}`);
-    const decimals = Number(decimalsRes.stdout.trim());
+    const decimals = Number(decimalsTx.result);
     // Same {price, expo} shape hermesPriceToCents already converts —
     // Reflector's price is priceData.price * 10^-decimals, i.e. expo = -decimals.
-    return hermesPriceToCents(priceData.price, -decimals);
+    return hermesPriceToCents(priceData.price.toString(), -decimals);
   }
 
   /**
