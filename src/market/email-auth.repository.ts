@@ -1,6 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import Database from 'better-sqlite3';
 import { DATABASE } from './database.provider';
+
+const EXPIRED_CODE_SWEEP_MS = 60 * 60 * 1000;
 
 interface EmailCodeRow {
   email: string;
@@ -25,7 +27,9 @@ export interface EmailWalletRow {
  * fine rather than needing to thread the market repo's own handle through.
  */
 @Injectable()
-export class EmailAuthRepository {
+export class EmailAuthRepository implements OnModuleInit, OnModuleDestroy {
+  private sweepTimer?: NodeJS.Timeout;
+
   constructor(@Inject(DATABASE) private readonly db: Database.Database) {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS email_login_codes (
@@ -43,6 +47,21 @@ export class EmailAuthRepository {
         created_at INTEGER NOT NULL
       );
     `);
+  }
+
+  /** Starts the hourly sweep of expired, never-verified login codes. */
+  onModuleInit(): void {
+    this.sweepTimer = setInterval(() => this.deleteExpiredCodes(Date.now()), EXPIRED_CODE_SWEEP_MS);
+    this.sweepTimer.unref?.();
+  }
+
+  onModuleDestroy(): void {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+  }
+
+  /** Purges codes past `expires_at` (e.g. requested but never verified); returns rows removed. */
+  deleteExpiredCodes(now: number): number {
+    return this.db.prepare('DELETE FROM email_login_codes WHERE expires_at < ?').run(now).changes;
   }
 
   saveCode(email: string, codeHash: string, expiresAt: number): void {
