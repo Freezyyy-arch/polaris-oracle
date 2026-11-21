@@ -1,32 +1,13 @@
-import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable } from '@nestjs/common';
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { DATABASE } from './database.provider';
 import type { WatchedMarket } from './market.types';
 
-/**
- * Nest can't inject a bare `string` (or number/boolean) as a provider token
- * — DI tokens need identity, and primitives don't have any of their own, so
- * two `string`-typed bindings would collide. A dedicated Symbol gives the
- * DB path its own identity; tests bind it to `':memory:'`.
- */
-export const MARKETS_DB_PATH = Symbol('MARKETS_DB_PATH');
+export { MARKETS_DB_PATH } from './database.provider';
 
 @Injectable()
-export class MarketRepository implements OnModuleDestroy {
-  private readonly db: Database.Database;
-
-  constructor(
-    @Inject(MARKETS_DB_PATH) private readonly dbPath: string,
-    config: ConfigService,
-  ) {
-    const path = this.dbPath ?? config.get<string>('marketsDbFile') ?? './data/markets.db';
-    if (path !== ':memory:') {
-      mkdirSync(dirname(path), { recursive: true });
-    }
-    this.db = new Database(path);
-    this.db.pragma('journal_mode = WAL');
+export class MarketRepository {
+  constructor(@Inject(DATABASE) private readonly db: Database.Database) {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS markets (
         contract_id TEXT PRIMARY KEY,
@@ -78,10 +59,6 @@ export class MarketRepository implements OnModuleDestroy {
       .prepare(`SELECT * FROM markets WHERE feed_id = ? ORDER BY created_at DESC`)
       .all(feedId) as any[];
     return rows.map(rowToMarket);
-  }
-
-  onModuleDestroy(): void {
-    this.db.close();
   }
 }
 

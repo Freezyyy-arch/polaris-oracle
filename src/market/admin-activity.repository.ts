@@ -1,9 +1,6 @@
-import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable } from '@nestjs/common';
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { MARKETS_DB_PATH } from './market.repository';
+import { DATABASE } from './database.provider';
 
 export type WalletActionFunction = 'buy' | 'sell' | 'split' | 'merge' | 'redeem' | 'transfer' | 'terminate';
 export type WalletActionSource = 'passkey' | 'email' | 'admin';
@@ -56,16 +53,8 @@ export interface SettlementCheckRow {
  * connection to the same WAL-mode file is fine.
  */
 @Injectable()
-export class AdminActivityRepository implements OnModuleDestroy {
-  private readonly db: Database.Database;
-
-  constructor(@Inject(MARKETS_DB_PATH) dbPath: string, config: ConfigService) {
-    const path = dbPath ?? config.get<string>('marketsDbFile') ?? './data/markets.db';
-    if (path !== ':memory:') {
-      mkdirSync(dirname(path), { recursive: true });
-    }
-    this.db = new Database(path);
-    this.db.pragma('journal_mode = WAL');
+export class AdminActivityRepository {
+  constructor(@Inject(DATABASE) private readonly db: Database.Database) {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS wallet_actions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,9 +193,5 @@ export class AdminActivityRepository implements OnModuleDestroy {
     const counts: Record<SettlementCheckOutcome, number> = { ok: 0, skipped: 0, failed: 0 };
     for (const row of rows) counts[row.outcome] = row.n;
     return counts;
-  }
-
-  onModuleDestroy(): void {
-    this.db.close();
   }
 }

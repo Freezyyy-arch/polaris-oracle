@@ -1,30 +1,11 @@
-import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable } from '@nestjs/common';
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { DATABASE } from './database.provider';
 import type { WatchedPerpetual } from './perpetual.types';
 
-/** See `MARKETS_DB_PATH`'s doc comment — same reason this needs its own DI token. */
-export const PERPETUALS_DB_PATH = Symbol('PERPETUALS_DB_PATH');
-
 @Injectable()
-export class PerpetualRepository implements OnModuleDestroy {
-  private readonly db: Database.Database;
-
-  constructor(
-    @Inject(PERPETUALS_DB_PATH) private readonly dbPath: string,
-    config: ConfigService,
-  ) {
-    // Same sqlite file as classic markets by default — one `data/` dir to
-    // operate, not two — just a separate table, since the two shapes don't
-    // overlap (see `perpetual.types.ts`'s doc comment).
-    const path = this.dbPath ?? config.get<string>('marketsDbFile') ?? './data/markets.db';
-    if (path !== ':memory:') {
-      mkdirSync(dirname(path), { recursive: true });
-    }
-    this.db = new Database(path);
-    this.db.pragma('journal_mode = WAL');
+export class PerpetualRepository {
+  constructor(@Inject(DATABASE) private readonly db: Database.Database) {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS perpetuals (
         contract_id TEXT PRIMARY KEY,
@@ -63,10 +44,6 @@ export class PerpetualRepository implements OnModuleDestroy {
   getById(contractId: string): WatchedPerpetual | undefined {
     const row = this.db.prepare(`SELECT * FROM perpetuals WHERE contract_id = ?`).get(contractId) as any;
     return row ? rowToPerpetual(row) : undefined;
-  }
-
-  onModuleDestroy(): void {
-    this.db.close();
   }
 }
 

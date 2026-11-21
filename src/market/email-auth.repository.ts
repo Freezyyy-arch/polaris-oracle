@@ -1,9 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { MARKETS_DB_PATH } from './market.repository';
+import { DATABASE } from './database.provider';
 
 interface EmailCodeRow {
   email: string;
@@ -29,15 +26,7 @@ export interface EmailWalletRow {
  */
 @Injectable()
 export class EmailAuthRepository {
-  private readonly db: Database.Database;
-
-  constructor(@Inject(MARKETS_DB_PATH) dbPath: string, config: ConfigService) {
-    const path = dbPath ?? config.get<string>('marketsDbFile') ?? './data/markets.db';
-    if (path !== ':memory:') {
-      mkdirSync(dirname(path), { recursive: true });
-    }
-    this.db = new Database(path);
-    this.db.pragma('journal_mode = WAL');
+  constructor(@Inject(DATABASE) private readonly db: Database.Database) {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS email_login_codes (
         email TEXT PRIMARY KEY,
