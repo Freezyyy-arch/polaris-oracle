@@ -78,7 +78,7 @@ export class EmailAuthController {
   me(@Req() req: Request) {
     const session = this.emailAuth.verifySession(readCookie(req, SESSION_COOKIE));
     if (!session) {
-      throw new UnauthorizedException('not signed in');
+      throw new UnauthorizedException('session not found or expired');
     }
     return { email: session.email, address: session.address };
   }
@@ -87,9 +87,9 @@ export class EmailAuthController {
   async trade(@Req() req: Request, @Body() dto: EmailTradeDto) {
     const session = this.emailAuth.verifySession(readCookie(req, SESSION_COOKIE));
     if (!session) {
-      throw new UnauthorizedException('not signed in');
+      throw new UnauthorizedException('session not found or expired — sign in again before trading');
     }
-    let result: { txHash: string; walletAddress: string };
+    let result: { txHash: string; walletAddress: string; status: 'success' | 'pending' };
     try {
       result = await this.emailAuth.signAndSubmitTrade(session.email, dto.contractId, dto.function, dto.args, dto.contractKind);
     } catch (err) {
@@ -116,7 +116,7 @@ export class EmailAuthController {
     } catch (err) {
       this.logger.warn(`failed to record admin-activity row for tx ${result.txHash}: ${(err as Error).message}`);
     }
-    return { txHash: result.txHash };
+    return { txHash: result.txHash, status: result.status };
   }
 
   private cookieOptions() {

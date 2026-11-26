@@ -139,15 +139,18 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Looks up the catalog entry for a feed by its numeric ID; returns undefined if the feed is not in the configured catalog. */
   private catalogEntry(feedId: number): FeedCatalogEntry | undefined {
     const catalog = this.config.get<FeedCatalogEntry[]>('feedCatalog') ?? [];
     return catalog.find((e) => e.feedId === feedId);
   }
 
+  /** Returns true if any market for this feed is in a non-terminal state (watching or pending), preventing duplicate creation. */
   private hasOpenMarket(feedId: number): boolean {
     return this.repo.getByFeedId(feedId).some((m) => m.status === 'watching' || m.status === 'pending');
   }
 
+  /** Withdraws seed liquidity from the vault and deploys a new market contract for the given feed catalog entry. */
   private async createMarketFor(entry: FeedCatalogEntry): Promise<{ contractId: string; strikePriceCents: bigint }> {
     const vaultContract = this.config.get<string>('vaultContract');
     const lazerContract = this.config.get<string>('lazerContract');

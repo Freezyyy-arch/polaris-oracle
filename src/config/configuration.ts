@@ -26,7 +26,6 @@ export interface AppConfig {
   faucetMaxPerHour: number;
   /** IP-keyed limit on POST /wallets/deploy — mitigates, doesn't close, the known unauthenticated-endpoint gap (see WalletDeployRateLimiter). */
   walletDeployMaxPerHour: number;
-  settleFreshnessWindowSecs: number;
   emailWalletEncKeyHex: string;
   sessionJwtSecret: string;
   sessionTtlSecs: number;
@@ -153,26 +152,41 @@ const DEFAULT_FEED_CATALOG: { feedId: number; hermesFeedId: string; symbol: stri
 ];
 
 /** Parses `FEED_CATALOG` (a JSON array of `{feedId, hermesFeedId, symbol}`) — falls back to the single feed this build has always used rather than throwing, since a malformed env var shouldn't stop the whole process from booting. */
-function parseFeedCatalog(raw: string | undefined): { feedId: number; hermesFeedId: string; symbol: string }[] {
+export function parseFeedCatalog(raw: string | undefined): { feedId: number; hermesFeedId: string; symbol: string }[] {
   if (!raw) return DEFAULT_FEED_CATALOG;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw);
-    if (
-      Array.isArray(parsed) &&
-      parsed.every(
-        (f) => typeof f?.feedId === 'number' && typeof f?.hermesFeedId === 'string' && typeof f?.symbol === 'string',
-      )
-    ) {
-      return parsed;
-    }
+    parsed = JSON.parse(raw);
   } catch {
-    // fall through to the warning + default below
+    // eslint-disable-next-line no-console
+    console.warn('[config] FEED_CATALOG is not valid JSON — falling back to the default XLM/USD-only catalog.');
+    return DEFAULT_FEED_CATALOG;
   }
-  // eslint-disable-next-line no-console
-  console.warn(
-    `[config] FEED_CATALOG is set but not a valid JSON array of {feedId, hermesFeedId, symbol} — using the default.`,
-  );
-  return DEFAULT_FEED_CATALOG;
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    // eslint-disable-next-line no-console
+    console.warn('[config] FEED_CATALOG must be a non-empty JSON array — falling back to the default XLM/USD-only catalog.');
+    return DEFAULT_FEED_CATALOG;
+  }
+  const catalog: { feedId: number; hermesFeedId: string; symbol: string }[] = [];
+  for (const entry of parsed) {
+    if (
+      typeof entry !== 'object' ||
+      entry === null ||
+      typeof (entry as Record<string, unknown>).feedId !== 'number' ||
+      typeof (entry as Record<string, unknown>).hermesFeedId !== 'string' ||
+      typeof (entry as Record<string, unknown>).symbol !== 'string'
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn('[config] FEED_CATALOG entry is missing a numeric `feedId` or string `hermesFeedId`/`symbol` — falling back to the default XLM/USD-only catalog.');
+      return DEFAULT_FEED_CATALOG;
+    }
+    catalog.push({
+      feedId: (entry as { feedId: number }).feedId,
+      hermesFeedId: (entry as { hermesFeedId: string }).hermesFeedId,
+      symbol: (entry as { symbol: string }).symbol,
+    });
+  }
+  return catalog;
 }
 
 export default (): AppConfig => ({

@@ -36,6 +36,8 @@ export interface SettlementCheckRow {
   lazer_price_cents: string | null;
   hermes_price_cents: string | null;
   divergence_bps: number | null;
+  redstone_price_cents: string | null;
+  redstone_divergence_bps: number | null;
   outcome: SettlementCheckOutcome;
   reason: string | null;
   created_at: number;
@@ -97,6 +99,8 @@ export class AdminActivityRepository implements OnModuleDestroy {
         lazer_price_cents TEXT,
         hermes_price_cents TEXT,
         divergence_bps INTEGER,
+        redstone_price_cents TEXT,
+        redstone_divergence_bps INTEGER,
         outcome TEXT NOT NULL,
         reason TEXT,
         created_at INTEGER NOT NULL
@@ -146,19 +150,23 @@ export class AdminActivityRepository implements OnModuleDestroy {
     lazerPriceCents: bigint | undefined;
     hermesPriceCents: bigint | undefined;
     divergenceBps: number | undefined;
+    redstonePriceCents?: bigint | undefined;
+    redstoneDivergenceBps?: number | undefined;
     outcome: SettlementCheckOutcome;
     reason: string | undefined;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO settlement_checks (market_contract_id, lazer_price_cents, hermes_price_cents, divergence_bps, outcome, reason, created_at)
-         VALUES (@marketContractId, @lazerPriceCents, @hermesPriceCents, @divergenceBps, @outcome, @reason, @createdAt)`,
+        `INSERT INTO settlement_checks (market_contract_id, lazer_price_cents, hermes_price_cents, divergence_bps, redstone_price_cents, redstone_divergence_bps, outcome, reason, created_at)
+         VALUES (@marketContractId, @lazerPriceCents, @hermesPriceCents, @divergenceBps, @redstonePriceCents, @redstoneDivergenceBps, @outcome, @reason, @createdAt)`,
       )
       .run({
         marketContractId: check.marketContractId,
         lazerPriceCents: check.lazerPriceCents?.toString() ?? null,
         hermesPriceCents: check.hermesPriceCents?.toString() ?? null,
         divergenceBps: check.divergenceBps ?? null,
+        redstonePriceCents: check.redstonePriceCents?.toString() ?? null,
+        redstoneDivergenceBps: check.redstoneDivergenceBps ?? null,
         outcome: check.outcome,
         reason: check.reason ?? null,
         createdAt: Date.now(),

@@ -30,6 +30,15 @@ export class FaucetService {
     return true;
   }
 
+  /**
+   * Funds `address` via Stellar Friendbot. Must be called only after `tryConsume`
+   * succeeds; callers that skip the rate-limit check risk hammering Friendbot on
+   * every request. Returns `{ funded: true }` on success, `{ alreadyExists: true }`
+   * when the account already exists on testnet (Friendbot only creates new accounts),
+   * and throws on any other non-2xx response.
+   *
+   * Rate-limit design is tracked in issue #12.
+   */
   async fund(address: string): Promise<{ funded: boolean; alreadyExists: boolean }> {
     const friendbotUrl = this.config.get<string>('friendbotUrl')!;
     const res = await fetch(`${friendbotUrl}?addr=${encodeURIComponent(address)}`);
