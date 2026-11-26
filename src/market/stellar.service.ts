@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Keypair, rpc } from '@stellar/stellar-sdk';
+import { Keypair, rpc, type Transaction } from '@stellar/stellar-sdk';
 import { contract as StellarContract } from '@stellar/stellar-sdk';
 import { xdr } from '@stellar/stellar-sdk';
 import { execFile } from 'node:child_process';
@@ -311,6 +311,11 @@ export class StellarService {
 
   get oraclePublicKey(): string {
     return this.keypair.publicKey();
+  }
+
+  /** Signs `tx` in place as the sponsor/fee-payer (the oracle keypair) — used by `AuthRelayService`. */
+  signAsSponsor(tx: Transaction): void {
+    tx.sign(this.keypair);
   }
 
   get deployerPublicKey(): string {
@@ -722,12 +727,8 @@ export class StellarService {
   // this transaction to match it. See the field doc comment on
   // `deployerKeypair` for why this split is safe and worth having.
   async deployMarket(params: CreateMarketParams): Promise<{ contractId: string; initTxHash: string }> {
-    await this.ensureDeployerCliIdentity();
-    const network = this.config.get<string>('stellarNetwork')!;
-    const deploy = await this.execStellarCli([
-      'contract',
-      'deploy',
-      '--wasm',
+    return this.deployAndInitialize(
+      'market',
       'wasm/polaris_market.wasm',
       '--source',
       this.deployerCliIdentity,
@@ -865,21 +866,53 @@ export class StellarService {
   /**
    * Same deploy-then-initialize CLI shell-out as `deployMarket`, for
    * `polaris-perpetual` — no strike/expiry/grace_period/feed_id (none
-   * exist on this contract), and `price_oracle` is unconditionally `None`:
-   * this backend doesn't wire a real Lazer+Reflector[+RedStone] bundle
-   * into perpetual deployment yet (that's a separate follow-up — see
-   * `polaris-contracts/README.md`'s "A third oracle: RedStone", which is
-   * mainnet-only regardless). `record_price_checkpoint` is consequently
-   * not exposed anywhere in this backend either — see `PerpetualController`.
+   * exist on this contract). `price_oracle` is `None` unless
+   * `params.priceOracle` is supplied (see `buildPriceOracleArg`).
    */
   async deployPerpetual(params: CreatePerpetualParams): Promise<{ contractId: string; initTxHash: string }> {
-    await this.ensureDeployerCliIdentity();
+    return this.deployAndInitialize(
+      'perpetual',
+      'wasm/polaris_perpetual.wasm',
+      [
+        'initialize',
+        '--admin',
+        this.deployerPublicKey,
+        '--collateral',
+        params.collateralAsset,
+        '--base_fee_bps',
+        params.baseFeeBps.toString(),
+        '--min_fee_bps',
+        params.minFeeBps.toString(),
+        '--treasury',
+        params.treasury,
+        '--initial_liquidity',
+        params.initialLiquidityStroops.toString(),
+        '--price_oracle',
+        params.priceOracle ? buildPriceOracleArg(params.priceOracle) : 'null',
+      ],
+      (id) => this.getPerpetualState(id),
+    );
+  }
+
+  /**
+   * Shared tail of `deployMarket` / `deployPerpetual`: `contract deploy`,
+   * contract-id extraction, the propagation wait, `initialize`, and the
+   * AlreadyInitialized reconciliation. `initArgs` is everything after the
+   * `--` (the function name and its params); `readState` is the contract's
+   * own state reader, used only to confirm an AlreadyInitialized report.
+   */
+  private async deployAndInitialize(
+    label: 'market' | 'perpetual',
+    wasmPath: string,
+    initArgs: string[],
+    readState: (contractId: string) => Promise<{ status: string }>,
+  ): Promise<{ contractId: string; initTxHash: string }> {
     const network = this.config.get<string>('stellarNetwork')!;
     const deploy = await this.execStellarCli([
       'contract',
       'deploy',
       '--wasm',
-      'wasm/polaris_perpetual.wasm',
+      wasmPath,
       '--source',
       this.deployerCliIdentity,
       '--network',
@@ -889,12 +922,12 @@ export class StellarService {
       '--network-passphrase',
       this.networkPassphrase,
     ]);
-    const contractId = extractContractId(deploy.stdout);
-    this.logger.log(`deployed perpetual contract ${contractId}`);
+    const contractId = deploy.stdout.trim().split('\n').pop()!.trim();
+    this.logger.log(`deployed ${label} contract ${contractId}`);
 
     await this.waitForContractVisible(contractId);
 
-    const initArgs = [
+    const invokeArgs = [
       'contract',
       'invoke',
       '--id',
@@ -908,33 +941,29 @@ export class StellarService {
       '--network-passphrase',
       this.networkPassphrase,
       '--',
-      'initialize',
-      '--admin',
-      this.deployerPublicKey,
-      '--collateral',
-      params.collateralAsset,
-      '--base_fee_bps',
-      params.baseFeeBps.toString(),
-      '--min_fee_bps',
-      params.minFeeBps.toString(),
-      '--treasury',
-      params.treasury,
-      '--initial_liquidity',
-      params.initialLiquidityStroops.toString(),
-      '--price_oracle',
-      params.priceOracle ? buildPriceOracleArg(params.priceOracle) : 'null',
+      ...initArgs,
     ];
 
     try {
-      const invoke = await this.execStellarCli(initArgs);
+      const invoke = await this.execStellarCli(invokeArgs);
       return { contractId, initTxHash: invoke.stdout.trim() };
     } catch (err) {
-      // Same AlreadyInitialized reconciliation as `deployMarket` — see its
-      // own comment for the full "CLI can report failure on a call that
-      // actually succeeded on-chain" reasoning.
-      if (!StellarService.isAlreadyInitializedError(err)) throw err; // not AlreadyInitialized (#2)
-      const state = await this.getPerpetualState(contractId);
-      if (state.status !== 'Open') throw err;
+      // Confirmed live: the CLI's own submission can succeed on-chain while
+      // still reporting a client-side failure (its result-polling hit a
+      // hiccup and, per the doc comment on PERMANENT_CONTRACT_ERROR, a
+      // second internal attempt then simulates against the now-initialized
+      // contract and reports the *simulation's* rejection instead) — the
+      // exact same "crash between on-chain success and this backend
+      // recording it" shape as MarketService.reconcileWithChain, just for
+      // deploy instead of settle/cancel. Without this check, a genuinely
+      // successful deploy would be reported as a failure and — for
+      // MarketFactoryService specifically — the vault capital that already
+      // funded this real, open market would never get an entry in
+      // MarketRepository, so it would never get settlement timers armed.
+      const message = (err as { stderr?: string; message: string }).stderr ?? (err as Error).message;
+      if (!/Error\(Contract, #2\)/.test(message)) throw err; // #2 = AlreadyInitialized, see the contract's Error enum
+      const state = await readState(contractId);
+      if (state.status !== 'Open') throw err; // genuinely uninitialized/broken — the AlreadyInitialized report was accurate, not a false negative
       this.logger.warn(
         `initialize on ${contractId} reported AlreadyInitialized but the contract is Open on-chain — treating as already succeeded, not a failure (no initTxHash available for this reconciled path)`,
       );

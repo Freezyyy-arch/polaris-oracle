@@ -48,11 +48,8 @@ export class OddsSnapshotService implements OnModuleInit, OnModuleDestroy {
 
   /** One pass over every open classic market and perpetual — each is independent, same "isolate the blast radius per unit of work" shape as `MarketFactoryService.run()`. */
   async run(): Promise<void> {
-    const contracts = [
-      ...this.markets.list().filter((m) => m.status === 'watching'),
-      ...this.perpetuals.list().filter((p) => p.status === 'watching'),
-    ];
-    for (const c of contracts) {
+    const open = this.markets.list().filter((m) => m.status === 'watching' || m.status === 'pending');
+    for (const m of open) {
       try {
         const { yesBps, noBps } = await this.stellar.getPrice(c.contractId);
         this.snapshots.record(c.contractId, yesBps, noBps);
