@@ -58,4 +58,17 @@ describe('MarketRepository', () => {
     expect(repo.getByFeedId(100).map((m) => m.contractId)).toEqual(['CNEW', 'COLD']);
     expect(repo.getByFeedId(999)).toEqual([]);
   });
+
+  it('persists corrected strike/expiry/grace/feed when upserting an existing row', () => {
+    const repo = new MarketRepository(':memory:', makeConfig());
+    repo.upsert(sample({ expiry: 1_000, strikePriceCents: '1', gracePeriodSecs: 10, feedId: 1 }));
+    repo.upsert(sample({ expiry: 2_500_000, strikePriceCents: '999', gracePeriodSecs: 7200, feedId: 2 }));
+
+    expect(repo.getById('CCONTRACT1')).toMatchObject({
+      expiry: 2_500_000,
+      strikePriceCents: '999',
+      gracePeriodSecs: 7200,
+      feedId: 2,
+    });
+  });
 });
