@@ -96,6 +96,7 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
    * timers.
    */
   async run(): Promise<MarketFactoryRunResult> {
+    await this.checkHotWalletBalances();
     const catalog = this.config.get<FeedCatalogEntry[]>('feedCatalog') ?? [];
     const result: MarketFactoryRunResult = { created: [], skipped: [], failed: [] };
 
@@ -138,15 +139,18 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Looks up the catalog entry for a feed by its numeric ID; returns undefined if the feed is not in the configured catalog. */
   private catalogEntry(feedId: number): FeedCatalogEntry | undefined {
     const catalog = this.config.get<FeedCatalogEntry[]>('feedCatalog') ?? [];
     return catalog.find((e) => e.feedId === feedId);
   }
 
+  /** Returns true if any market for this feed is in a non-terminal state (watching or pending), preventing duplicate creation. */
   private hasOpenMarket(feedId: number): boolean {
     return this.repo.getByFeedId(feedId).some((m) => m.status === 'watching' || m.status === 'pending');
   }
 
+  /** Withdraws seed liquidity from the vault and deploys a new market contract for the given feed catalog entry. */
   private async createMarketFor(entry: FeedCatalogEntry): Promise<{ contractId: string; strikePriceCents: bigint }> {
     const vaultContract = this.config.get<string>('vaultContract');
     const lazerContract = this.config.get<string>('lazerContract');
@@ -234,6 +238,31 @@ export class MarketFactoryService implements OnModuleInit, OnModuleDestroy {
    * (timeout, malformed response, missing catalog entry) still falls
    * through to this same path unchanged.
    */
+  /** Logs a warning when the oracle or deployer hot-wallet XLM balance is below the configured threshold. Called once per factory interval. Requires `nativeXlmSac` to be configured; silently skips otherwise. */
+  private async checkHotWalletBalances(): Promise<void> {
+    const nativeXlmSac = this.config.get<string>('nativeXlmSac');
+    if (!nativeXlmSac) return;
+    const minStroops = BigInt(this.config.get<string>('oracleMinBalanceStroops') ?? '50000000');
+    const wallets: { label: string; address: string }[] = [
+      { label: 'oracle', address: this.stellar.oraclePublicKey },
+      { label: 'deployer', address: this.stellar.deployerPublicKey },
+    ];
+    await Promise.allSettled(
+      wallets.map(async ({ label, address }) => {
+        try {
+          const balance = await this.stellar.tokenBalance(nativeXlmSac, address);
+          if (balance < minStroops) {
+            this.logger.warn(
+              `${label} hot-wallet XLM balance low: ${balance} stroops (threshold: ${minStroops}) — trades, settlement, and wallet deploys may fail`,
+            );
+          }
+        } catch (err) {
+          this.logger.warn(`failed to read ${label} hot-wallet XLM balance: ${(err as Error).message}`);
+        }
+      }),
+    );
+  }
+
   private async fetchStrikePriceCents(entry: FeedCatalogEntry, reflectorContract: string): Promise<bigint> {
     const hermesUrl = this.config.get<string>('pythHermesUrl')!;
     try {
