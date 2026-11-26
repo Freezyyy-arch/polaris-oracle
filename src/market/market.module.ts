@@ -25,6 +25,7 @@ import { MarketRepository, MARKETS_DB_PATH } from './market.repository';
 import { PerpetualRepository, PERPETUALS_DB_PATH } from './perpetual.repository';
 import { EmailAuthRepository } from './email-auth.repository';
 import { AdminActivityRepository } from './admin-activity.repository';
+import { TradeActivityRecorder } from './trade-activity-recorder.service';
 import { EMAIL_SENDER, ConsoleEmailSender, ResendEmailSender } from './email-sender';
 
 @Module({
@@ -48,6 +49,7 @@ import { EMAIL_SENDER, ConsoleEmailSender, ResendEmailSender } from './email-sen
     PerpetualRepository,
     EmailAuthRepository,
     AdminActivityRepository,
+    TradeActivityRecorder,
     ConsoleEmailSender,
     ResendEmailSender,
     {
