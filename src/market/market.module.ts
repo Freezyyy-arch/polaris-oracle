@@ -22,10 +22,10 @@ import { WalletDeployRateLimiter } from './wallet-deploy-rate-limiter.service';
 import { EmailAuthService } from './email-auth.service';
 import { AdminGuard } from './admin.guard';
 import { MarketRepository, MARKETS_DB_PATH } from './market.repository';
-import { PerpetualRepository, PERPETUALS_DB_PATH } from './perpetual.repository';
+import { PerpetualRepository } from './perpetual.repository';
 import { EmailAuthRepository } from './email-auth.repository';
 import { AdminActivityRepository } from './admin-activity.repository';
-import { TradeActivityRecorder } from './trade-activity-recorder.service';
+import { databaseProviders } from './database.provider';
 import { EMAIL_SENDER, ConsoleEmailSender, ResendEmailSender } from './email-sender';
 
 @Module({
@@ -57,11 +57,7 @@ import { EMAIL_SENDER, ConsoleEmailSender, ResendEmailSender } from './email-sen
       useFactory: (config: ConfigService) => config.get<string>('marketsDbFile'),
       inject: [ConfigService],
     },
-    {
-      provide: PERPETUALS_DB_PATH,
-      useFactory: (config: ConfigService) => config.get<string>('marketsDbFile'),
-      inject: [ConfigService],
-    },
+    ...databaseProviders,
     {
       provide: EMAIL_SENDER,
       useFactory: (config: ConfigService, consoleSender: ConsoleEmailSender, resendSender: ResendEmailSender) =>
