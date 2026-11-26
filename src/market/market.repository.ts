@@ -4,6 +4,7 @@ import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { WatchedMarket } from './market.types';
+import { runMigrations } from './schema-migrations';
 
 /**
  * Nest can't inject a bare `string` (or number/boolean) as a provider token
@@ -41,6 +42,7 @@ export class MarketRepository implements OnModuleDestroy {
         updated_at INTEGER NOT NULL
       );
     `);
+    runMigrations(this.db);
   }
 
   upsert(m: WatchedMarket): void {
@@ -49,6 +51,10 @@ export class MarketRepository implements OnModuleDestroy {
         `INSERT INTO markets (contract_id, strike_price_cents, expiry, grace_period_secs, feed_id, status, last_error, settle_tx_hash, created_at, updated_at)
          VALUES (@contractId, @strikePriceCents, @expiry, @gracePeriodSecs, @feedId, @status, @lastError, @settleTxHash, @createdAt, @updatedAt)
          ON CONFLICT(contract_id) DO UPDATE SET
+           strike_price_cents = excluded.strike_price_cents,
+           expiry = excluded.expiry,
+           grace_period_secs = excluded.grace_period_secs,
+           feed_id = excluded.feed_id,
            status = excluded.status,
            last_error = excluded.last_error,
            settle_tx_hash = excluded.settle_tx_hash,
