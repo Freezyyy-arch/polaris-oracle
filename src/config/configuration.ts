@@ -114,13 +114,8 @@ export interface AppConfig {
   mockRedstoneContract: string | undefined;
   redstoneMaxStalenessSecs: string;
   redstoneToleranceBps: number;
-  /**
-   * Ceiling (in stroops) on the inclusion fee `AuthRelayService` derives
-   * from `getFeeStats()` for sponsored relay/settlement transactions —
-   * caps sponsor cost under a fee spike instead of paying whatever the
-   * network's p70 happens to be.
-   */
-  maxInclusionFeeStroops: number;
+  /** Warn when the oracle or deployer hot-wallet XLM balance falls below this — in stroops. Requires `NATIVE_XLM_SAC` to be set; silently skipped otherwise. */
+  oracleMinBalanceStroops: string;
 }
 
 import { randomBytes } from 'node:crypto';
@@ -193,3 +188,77 @@ export function parseFeedCatalog(raw: string | undefined): { feedId: number; her
   }
   return catalog;
 }
+
+export default (): AppConfig => ({
+  port: Number(process.env.PORT ?? 3000),
+  oracleSecretKey: process.env.ORACLE_SECRET_KEY ?? '',
+  deployerSecretKey: process.env.DEPLOYER_SECRET_KEY,
+  adminApiKey: process.env.ADMIN_API_KEY ?? '',
+  pythLazerToken: process.env.PYTH_LAZER_TOKEN,
+  pythLazerWsUrl: process.env.PYTH_LAZER_WS_URL ?? 'wss://pyth-lazer.dourolabs.app/v1/stream',
+  pythHermesUrl: process.env.PYTH_HERMES_URL ?? 'https://hermes.pyth.network',
+  corsOrigins: (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean),
+  stellarRpcUrl: process.env.STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org',
+  stellarNetworkPassphrase:
+    process.env.STELLAR_NETWORK_PASSPHRASE ?? 'Test SDF Network ; September 2015',
+  stellarNetwork: process.env.STELLAR_NETWORK ?? 'testnet',
+  marketWasmHash: process.env.MARKET_WASM_HASH,
+  perpetualWasmHash: process.env.PERPETUAL_WASM_HASH,
+  lazerContract: process.env.LAZER_CONTRACT,
+  nativeXlmSac: process.env.NATIVE_XLM_SAC,
+  smartWalletFactoryContract: process.env.SMART_WALLET_FACTORY_CONTRACT,
+  smartWalletWasmHash: process.env.SMART_WALLET_WASM_HASH,
+  treasuryAddress: process.env.TREASURY_ADDRESS,
+  // Placeholder testnet feed id — production must use Pyth's real
+  // registered Lazer feed id for XLM/USD (see contracts README).
+  xlmUsdFeedId: Number(process.env.XLM_USD_FEED_ID ?? 100),
+  marketsDbFile: process.env.MARKETS_DB_FILE ?? './data/markets.db',
+  friendbotUrl: process.env.FRIENDBOT_URL ?? 'https://friendbot.stellar.org',
+  faucetAmountStroops: process.env.FAUCET_AMOUNT_STROOPS ?? '5000000000', // 500 XLM
+  faucetMaxPerHour: Number(process.env.FAUCET_MAX_PER_HOUR ?? 3),
+  walletDeployMaxPerHour: Number(process.env.WALLET_DEPLOY_MAX_PER_HOUR ?? 5),
+  settleFreshnessWindowSecs: Number(process.env.SETTLE_FRESHNESS_WINDOW_SECS ?? 300),
+  // 32 bytes hex = AES-256-GCM key, encrypting custodial private keys at rest.
+  emailWalletEncKeyHex: devFallbackSecret('EMAIL_WALLET_ENC_KEY', 32),
+  sessionJwtSecret: devFallbackSecret('SESSION_JWT_SECRET', 32),
+  sessionTtlSecs: Number(process.env.SESSION_TTL_SECS ?? 60 * 60 * 24 * 30), // 30 days
+  // 'console' (default, logs the code — no real delivery) or 'resend'.
+  emailProvider: process.env.EMAIL_PROVIDER ?? 'console',
+  resendApiKey: process.env.RESEND_API_KEY,
+  emailFrom: process.env.EMAIL_FROM ?? 'Polaris <login@polaris.app>',
+  emailCodeTtlSecs: Number(process.env.EMAIL_CODE_TTL_SECS ?? 600), // 10 minutes
+  emailCodeMaxAttempts: Number(process.env.EMAIL_CODE_MAX_ATTEMPTS ?? 5),
+  emailCodeResendCooldownSecs: Number(process.env.EMAIL_CODE_RESEND_COOLDOWN_SECS ?? 60),
+  emailWalletRpId: process.env.EMAIL_WALLET_RP_ID ?? 'localhost',
+  emailWalletOrigin: process.env.EMAIL_WALLET_ORIGIN ?? 'http://localhost:3000',
+  vaultContract: process.env.VAULT_CONTRACT,
+  feedCatalog: parseFeedCatalog(process.env.FEED_CATALOG),
+  settleOracleToleranceBps: Number(process.env.SETTLE_ORACLE_TOLERANCE_BPS ?? 150),
+  reflectorContract: process.env.REFLECTOR_CONTRACT,
+  reflectorAsset: process.env.REFLECTOR_ASSET ?? 'XLM',
+  // Comfortably above the real Reflector testnet oracle's own resolution()
+  // (300s, confirmed live) — initialize() itself also validates this
+  // on-chain against whatever the configured instance actually reports.
+  reflectorMaxStalenessSecs: process.env.REFLECTOR_MAX_STALENESS_SECS ?? '600',
+  reflectorToleranceBps: Number(process.env.REFLECTOR_TOLERANCE_BPS ?? 150),
+  // 5 min: this is now a safety net for a missed 'finalized' event (see
+  // MarketFactoryService), not the primary creation trigger — the common
+  // case is a cheap hasOpenMarket check with no network calls, and staying
+  // well under marketFactoryGracePeriodSecs (1h default) bounds how long a
+  // crash right after expiry could leave a feed dark.
+  marketFactoryIntervalSecs: Number(process.env.MARKET_FACTORY_INTERVAL_SECS ?? 5 * 60),
+  oddsSnapshotIntervalSecs: Number(process.env.ODDS_SNAPSHOT_INTERVAL_SECS ?? 5 * 60),
+  oddsChangeWindowSecs: Number(process.env.ODDS_CHANGE_WINDOW_SECS ?? 60 * 60),
+  marketFactoryExpirySecs: Number(process.env.MARKET_FACTORY_EXPIRY_SECS ?? 24 * 60 * 60), // 24 hours
+  marketFactoryGracePeriodSecs: Number(process.env.MARKET_FACTORY_GRACE_PERIOD_SECS ?? 3600),
+  marketFactoryBaseFeeBps: Number(process.env.MARKET_FACTORY_BASE_FEE_BPS ?? 100),
+  marketFactoryMinFeeBps: Number(process.env.MARKET_FACTORY_MIN_FEE_BPS ?? 20),
+  marketFactoryInitialLiquidityStroops: process.env.MARKET_FACTORY_INITIAL_LIQUIDITY_STROOPS ?? '1000000000', // 100 XLM
+  mockRedstoneContract: process.env.MOCK_REDSTONE_CONTRACT,
+  redstoneMaxStalenessSecs: process.env.REDSTONE_MAX_STALENESS_SECS ?? '600',
+  redstoneToleranceBps: Number(process.env.REDSTONE_TOLERANCE_BPS ?? 150),
+  oracleMinBalanceStroops: process.env.ORACLE_MIN_BALANCE_STROOPS ?? '50000000', // 5 XLM
+});
