@@ -5,10 +5,9 @@ import { contract as StellarContract } from '@stellar/stellar-sdk';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { marketSpec, perpetualSpec, factorySpec, vaultSpec, mockRedstoneSpec } from './contracts';
-import { hermesPriceToCents } from './pyth-price';
-import { getAccountLock, type AsyncLock } from './account-lock';
 import type { OnChainMarket } from './market.types';
 import type { OnChainPerpetual } from './perpetual.types';
+import { redactSecrets, sanitizeCliError, extractContractId, parseReflectorPrice } from './stellar-cli-utils';
 
 const execFileAsync = promisify(execFile);
 
@@ -738,7 +737,7 @@ export class StellarService {
       '--network-passphrase',
       this.networkPassphrase,
     ]);
-    const contractId = deploy.stdout.trim().split('\n').pop()!.trim();
+    const contractId = extractContractId(deploy.stdout);
     this.logger.log(`deployed market contract ${contractId}`);
 
     // The freshly deployed contract isn't always visible to the RPC node
@@ -843,33 +842,23 @@ export class StellarService {
    * this exact contract elsewhere in this codebase).
    */
   async getReflectorPriceCents(reflectorContract: string, asset: string): Promise<bigint> {
-    await this.ensureDeployerCliIdentity();
-    const network = this.config.get<string>('stellarNetwork')!;
-    const baseArgs = [
-      'contract',
-      'invoke',
-      '--id',
-      reflectorContract,
-      '--source',
-      this.deployerCliIdentity,
-      '--network',
-      network,
-      '--rpc-url',
-      this.rpcUrl,
-      '--network-passphrase',
-      this.networkPassphrase,
-      '--',
-    ];
-    const [priceRes, decimalsRes] = await Promise.all([
-      this.execStellarCli([...baseArgs, 'lastprice', '--asset', JSON.stringify({ Other: asset })]),
-      this.execStellarCli([...baseArgs, 'decimals']),
+    // Read-only simulation via contract.Client (like tokenBalance): no CLI
+    // process and no secret — oraclePublicKey is only the simulation source.
+    const client = (await StellarContract.Client.from({
+      contractId: reflectorContract,
+      networkPassphrase: this.networkPassphrase,
+      rpcUrl: this.rpcUrl,
+      allowHttp: this.rpcUrl.startsWith('http://'),
+      publicKey: this.oraclePublicKey,
+    })) as unknown as {
+      lastprice(args: { asset: { tag: 'Other'; values: [string] } }): Promise<StellarContract.AssembledTransaction<{ price: bigint; timestamp: bigint } | undefined | null>>;
+      decimals(): Promise<StellarContract.AssembledTransaction<number>>;
+    };
+    const [priceTx, decimalsTx] = await Promise.all([
+      this.withRpcRetry(() => client.lastprice({ asset: { tag: 'Other', values: [asset] } })),
+      this.withRpcRetry(() => client.decimals()),
     ]);
-    const priceData = JSON.parse(priceRes.stdout.trim()) as { price: string; timestamp: number } | null;
-    if (!priceData) throw new Error(`Reflector returned no price for asset ${asset}`);
-    const decimals = Number(decimalsRes.stdout.trim());
-    // Same {price, expo} shape hermesPriceToCents already converts —
-    // Reflector's price is priceData.price * 10^-decimals, i.e. expo = -decimals.
-    return hermesPriceToCents(priceData.price, -decimals);
+    return parseReflectorPrice(priceTx.result, decimalsTx.result, asset);
   }
 
   /**
@@ -899,7 +888,7 @@ export class StellarService {
       '--network-passphrase',
       this.networkPassphrase,
     ]);
-    const contractId = deploy.stdout.trim().split('\n').pop()!.trim();
+    const contractId = extractContractId(deploy.stdout);
     this.logger.log(`deployed perpetual contract ${contractId}`);
 
     await sleep(DEPLOY_TO_INIT_DELAY_MS);
@@ -974,8 +963,8 @@ export class StellarService {
         return await execFileAsync('stellar', args);
       } catch (err) {
         lastErr = err;
-        const message = (err as { stderr?: string; message: string }).stderr ?? (err as Error).message;
-        if (attempt === attempts || !isTransientStellarCliError(message)) throw err;
+        const message = redactSecrets((err as { stderr?: string; message: string }).stderr ?? (err as Error).message);
+        if (attempt === attempts || !isTransientStellarCliError(message)) throw sanitizeCliError(err);
         this.logger.warn(
           `stellar CLI call failed transiently (attempt ${attempt}/${attempts}), retrying: ${summaryLine(message)}`,
         );
