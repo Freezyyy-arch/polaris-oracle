@@ -17,6 +17,7 @@ import type { contract } from '@stellar/stellar-sdk';
 import { marketSpec, perpetualSpec } from './contracts';
 import { buildSponsoredCallArgs, type WireArgs } from './wire-args';
 import type { ContractKind } from './dto/prepare-auth.dto';
+import { getAccountLock, type AsyncLock } from './account-lock';
 
 /** `polaris-market`/`polaris-perpetual` share every sponsorable function's
  * name and shape (see `polaris-contracts/README.md`'s "The perpetual
@@ -73,6 +74,15 @@ export class AuthRelayService {
   private readonly server: rpc.Server;
   private readonly keypair: Keypair;
   private readonly networkPassphrase: string;
+  /**
+   * Shared with `StellarService` (keyed by the same `ORACLE_SECRET_KEY`
+   * secret — see account-lock.ts) because `submit()` below fetches this
+   * same source account's sequence number and submits a transaction from
+   * it, exactly like `StellarService.settle`/`cancel`/etc. Without sharing
+   * the lock, a sponsored-auth submit racing an oracle settle/cancel could
+   * each read the same sequence number before either submits.
+   */
+  private readonly accountLock: AsyncLock;
 
   constructor(private readonly config: ConfigService) {
     const secret = this.config.get<string>('oracleSecretKey');
@@ -83,8 +93,42 @@ export class AuthRelayService {
     this.networkPassphrase = this.config.get<string>('stellarNetworkPassphrase') ?? Networks.TESTNET;
     const rpcUrl = this.config.get<string>('stellarRpcUrl')!;
     this.server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+    this.accountLock = getAccountLock(secret);
   }
 
+  /**
+   * Inclusion fee for a sponsored transaction, derived from the network's
+   * current fee climate rather than hardcoded `BASE_FEE` — under surge
+   * pricing, a flat minimum fee just sits unincluded until the relay's
+   * poll gives up, with no clear cause to the caller. Uses the p70 bucket
+   * of `getFeeStats()`'s Soroban inclusion-fee distribution, capped by
+   * `maxInclusionFeeStroops` so a fee spike can't blow sponsor cost out
+   * unbounded. Falls back to `BASE_FEE` if the stats call itself fails —
+   * this must never become a new way to block a sponsored transaction.
+   */
+  private async inclusionFee(): Promise<string> {
+    const cap = this.config.get<number>('maxInclusionFeeStroops') ?? 100_000;
+    try {
+      const stats = await this.server.getFeeStats();
+      const p70 = Number(stats.sorobanInclusionFee?.p70 ?? BASE_FEE);
+      const fee = Math.max(Number(BASE_FEE), Math.min(p70, cap));
+      return String(fee);
+    } catch (err) {
+      this.logger.warn(`getFeeStats failed, falling back to BASE_FEE: ${(err as Error).message}`);
+      return BASE_FEE;
+    }
+  }
+
+  /**
+   * Step 1 of the two-round-trip sponsored relay: simulates the contract call,
+   * records which Soroban auth entries the wallet address must sign, and returns
+   * the 32-byte hash the passkey needs to sign plus the unsigned entry XDR.
+   * No network transaction is submitted here — this is read-only simulation.
+   * The entry XDR's nonce and invocation tree must be passed back unchanged to
+   * `submit()`; mutating it invalidates the hash the passkey already signed.
+   * Note: `contractId` has no allowlist check here; callers should validate it
+   * against a known-safe list before invoking (see issue #27).
+   */
   async prepare(
     walletAddress: string,
     contractId: string,
@@ -97,7 +141,7 @@ export class AuthRelayService {
 
     const sourceAccount = await this.server.getAccount(this.keypair.publicKey());
     const tx = new TransactionBuilder(sourceAccount, {
-      fee: BASE_FEE,
+      fee: await this.inclusionFee(),
       networkPassphrase: this.networkPassphrase,
     })
       .addOperation(op)
@@ -109,7 +153,7 @@ export class AuthRelayService {
       throw new BadRequestException(`simulation failed: ${sim.error}`);
     }
     if (!rpc.Api.isSimulationSuccess(sim)) {
-      throw new BadRequestException('simulation did not succeed');
+      throw new BadRequestException(`simulation did not succeed (status: ${(sim as { status?: string }).status ?? 'unknown'} — expected success, got restore?`);
     }
 
     const entries = sim.result?.auth ?? [];
@@ -136,6 +180,13 @@ export class AuthRelayService {
     };
   }
 
+  /**
+   * Step 2 of the two-round-trip sponsored relay: attaches the WebAuthn
+   * assertion to the unsigned auth entry returned by `prepare`, rebuilds the
+   * sponsored transaction, and submits it.  The wallet address is read back
+   * from the entry XDR itself (not from a client-supplied field) to prevent
+   * spoofing. Calls `pollTransaction` internally to await confirmation.
+   */
   async submit(
     contractId: string,
     functionName: string,
@@ -168,44 +219,60 @@ export class AuthRelayService {
     const op = new Contract(contractId).call(functionName, ...scArgs);
     op.body().invokeHostFunctionOp().auth([signedEntry]);
 
-    const sourceAccount = await this.server.getAccount(this.keypair.publicKey());
-    let tx = new TransactionBuilder(sourceAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(op)
-      .setTimeout(60)
-      .build();
+    // Serialized against this process's other submits from the same source
+    // account (StellarService.settle/cancel/etc share this lock) — the
+    // getAccount() sequence-number fetch below and the sendTransaction()
+    // submit must happen as one atomic unit from this account's point of
+    // view, otherwise a concurrent caller can read the same sequence number
+    // before either submits.
+    return this.accountLock.run(async () => {
+      const sourceAccount = await this.server.getAccount(this.keypair.publicKey());
+      let tx = new TransactionBuilder(sourceAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(op)
+        .setTimeout(60)
+        .build();
 
-    const sim = await this.server.simulateTransaction(tx);
-    if (rpc.Api.isSimulationError(sim)) {
-      throw new BadRequestException(`simulation failed: ${sim.error}`);
-    }
-    tx = rpc.assembleTransaction(tx, sim).build();
-    tx.sign(this.keypair);
+      const sim = await this.server.simulateTransaction(tx);
+      if (rpc.Api.isSimulationError(sim)) {
+        throw new BadRequestException(`simulation failed: ${sim.error}`);
+      }
+      tx = rpc.assembleTransaction(tx, sim).build();
+      tx.sign(this.keypair);
 
-    const sendRes = await this.server.sendTransaction(tx);
-    if (sendRes.status === 'ERROR') {
-      throw new BadRequestException(`submit failed: ${JSON.stringify(sendRes.errorResult)}`);
-    }
+      const sendRes = await this.server.sendTransaction(tx);
+      if (sendRes.status === 'ERROR') {
+        throw new BadRequestException(`submit failed: ${JSON.stringify(sendRes.errorResult)}`);
+      }
 
-    const finalRes = await this.pollTransaction(sendRes.hash);
-    if (finalRes.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-      throw new BadRequestException(`transaction ${sendRes.hash} did not succeed: ${finalRes.status}`);
-    }
+      const finalRes = await this.pollTransaction(sendRes.hash);
+      if (finalRes.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
+        throw new BadRequestException(`transaction ${sendRes.hash} did not succeed: ${finalRes.status}`);
+      }
 
-    return { txHash: sendRes.hash, walletAddress };
+      return { txHash: sendRes.hash, walletAddress };
+    });
   }
 
+  /**
+   * Polls the RPC node until the transaction is no longer `NOT_FOUND`
+   * (i.e. included in a ledger or failed), retrying up to `attempts` times
+   * with `delayMs` between each check. Throws if the transaction is never
+   * confirmed within the attempt budget.
+   */
   private async pollTransaction(txHash: string, attempts = 30, delayMs = 2000): Promise<rpc.Api.GetTransactionResponse> {
     for (let i = 0; i < attempts; i++) {
       const res = await this.server.getTransaction(txHash);
       if (res.status !== rpc.Api.GetTransactionStatus.NOT_FOUND) {
         return res;
       }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
     }
-    throw new Error(`transaction ${txHash} not confirmed after ${attempts} attempts`);
+    return { status: rpc.Api.GetTransactionStatus.NOT_FOUND } as rpc.Api.GetTransactionResponse;
   }
 }
 

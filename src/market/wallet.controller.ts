@@ -6,6 +6,7 @@ import {
   HttpException,
   HttpStatus,
   Logger,
+  Param,
   Post,
   Query,
   Req,
@@ -90,6 +91,15 @@ export class WalletController {
     return { address };
   }
 
+  /** Lets a caller keep polling a submitted tx's confirmation without holding the submit request open — see AuthRelayService.submit's doc comment. */
+  @Get('tx/:hash')
+  async txStatus(@Param('hash') txHash: string) {
+    if (!/^[0-9a-f]{64}$/i.test(txHash)) {
+      throw new BadRequestException('hash must be 64 hex characters');
+    }
+    return this.relay.txStatus(txHash);
+  }
+
   @Post('tx/prepare')
   async prepare(@Body() dto: PrepareAuthDto) {
     return this.relay.prepare(dto.walletAddress, dto.contractId, dto.function, dto.args, dto.contractKind);
@@ -133,6 +143,6 @@ export class WalletController {
     } catch (err) {
       this.logger.warn(`failed to record admin-activity row for tx ${result.txHash}: ${(err as Error).message}`);
     }
-    return { txHash: result.txHash };
+    return { txHash: result.txHash, status: result.status };
   }
 }

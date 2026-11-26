@@ -6,6 +6,8 @@ import { PriceController } from './price.controller';
 import { WalletController } from './wallet.controller';
 import { EmailAuthController } from './email-auth.controller';
 import { AdminController } from './admin.controller';
+import { MetricsController } from './metrics.controller';
+import { MetricsService } from './metrics.service';
 import { MarketService } from './market.service';
 import { PerpetualService } from './perpetual.service';
 import { MarketFactoryService } from './market-factory.service';
@@ -26,8 +28,9 @@ import { AdminActivityRepository } from './admin-activity.repository';
 import { EMAIL_SENDER, ConsoleEmailSender, ResendEmailSender } from './email-sender';
 
 @Module({
-  controllers: [MarketController, PerpetualController, PriceController, WalletController, EmailAuthController, AdminController],
+  controllers: [MarketController, PerpetualController, PriceController, WalletController, EmailAuthController, AdminController, MetricsController],
   providers: [
+    MetricsService,
     MarketService,
     PerpetualService,
     MarketFactoryService,
